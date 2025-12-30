@@ -5,7 +5,15 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <esp_task_wdt.h>
+#include <FastLED.h>
 #include "config.h"
+
+// ============================================================================
+// FastLED設定 (M5AtomS3 NeoPixel LED)
+// ============================================================================
+#define NUM_LEDS 1
+#define LED_PIN 35 // M5AtomS3 の LED ピン
+CRGB leds[NUM_LEDS];
 
 // ============================================================================
 // グローバル変数: センサー
@@ -25,11 +33,27 @@ PubSubClient client(wifiClient);
 unsigned long lastMqttPublish = 0;
 unsigned long lastSensorCheck = 0;
 unsigned long lastWifiReconnectAttempt = 0;
+unsigned long lastLedUpdate = 0;
+unsigned long lastMqttPublishSuccess = 0;
 unsigned int sensorErrorCount = 0;
 unsigned int mqttErrorCount = 0;
 unsigned int wifiErrorCount = 0;
 bool sensorHealthy = true;
 bool mqttHealthy = true;
+
+// ============================================================================
+// グローバル変数: LED状態
+// ============================================================================
+typedef enum
+{
+  LED_STATE_STARTUP,     // 起動中（紫色）
+  LED_STATE_CONNECTING,  // 接続中（黄色ゆっくり点滅）
+  LED_STATE_HEALTHY,     // 正常（青色点灯）
+  LED_STATE_ERROR,       // エラー（赤色高速点滅）
+  LED_STATE_MQTT_SUCCESS // MQTT送信成功（緑色短点灯）
+} LED_State_t;
+
+LED_State_t currentLedState = LED_STATE_STARTUP;
 
 // ============================================================================
 // ユーティリティ関数
@@ -67,6 +91,78 @@ void printFirmwareInfo()
   Serial.println(FIRMWARE_BUILD_TIME);
   Serial.println("================================================================================");
   Serial.println();
+}
+
+// ============================================================================
+// LED制御関数
+// ============================================================================
+
+/**
+ * @brief LEDを指定した色で点灯させる（RGB値で指定）
+ * @param red RED値 (0-255)
+ * @param green GREEN値 (0-255)
+ * @param blue BLUE値 (0-255)
+ */
+void setLedColor(uint8_t red, uint8_t green, uint8_t blue)
+{
+  // FastLED を使用して NeoPixel LED を制御
+  leds[0] = CRGB(red, green, blue);
+  FastLED.show();
+}
+
+/**
+ * @brief 現在の健康状態に応じてLED状態を更新
+ * 正常：青色点灯
+ * 接続中：黄色ゆっくり点滅
+ * エラー：赤色高速点滅
+ * MQTT送信成功：緑色短点灯
+ */
+void updateLedState()
+{
+  unsigned long currentTime = millis();
+
+  // MQTT送信成功の短い点灯（200msの表示）
+  if (currentLedState == LED_STATE_MQTT_SUCCESS &&
+      currentTime - lastMqttPublishSuccess > 200)
+  {
+    currentLedState = LED_STATE_HEALTHY;
+  }
+
+  // 100ms ごとにLED更新
+  if (currentTime - lastLedUpdate < 100)
+  {
+    return;
+  }
+  lastLedUpdate = currentTime;
+
+  // エラーがある場合は赤色高速点滅（100ms周期）
+  if (sensorErrorCount >= CONFIG_MAX_CONSECUTIVE_ERRORS ||
+      mqttErrorCount >= 5 ||
+      wifiErrorCount >= 3)
+  {
+    currentLedState = LED_STATE_ERROR;
+    static bool blink = false;
+    blink = !blink;
+    setLedColor(blink ? 255 : 0, 0, 0); // 赤色高速点滅
+  }
+  // WiFiまたはMQTT接続中は黄色ゆっくり点滅（500ms周期）
+  else if (WiFi.status() != WL_CONNECTED || !client.connected())
+  {
+    currentLedState = LED_STATE_CONNECTING;
+    static unsigned long blinkCycle = 0;
+    blinkCycle++;
+    if (blinkCycle > 5) // 500ms周期
+    {
+      blinkCycle = 0;
+    }
+    setLedColor(255, 255, 0); // 黄色点灯（全周期点灯で「ゆっくり」を表現）
+  }
+  // 正常状態は青色点灯
+  else
+  {
+    currentLedState = LED_STATE_HEALTHY;
+    setLedColor(0, 0, 255); // 青色点灯
+  }
 }
 
 // ============================================================================
@@ -233,6 +329,14 @@ void setup()
   Serial.begin(CONFIG_SERIAL_BAUD);
   delay(CONFIG_INIT_DELAY);
 
+  // FastLED初期化（M5AtomS3 NeoPixel LED）
+  FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
+  FastLED.setBrightness(200); // 明るさを80%に設定（バッテリー節約）
+
+  // LED初期化（起動中：紫色）
+  setLedColor(128, 0, 128);
+  currentLedState = LED_STATE_STARTUP;
+
   // ファームウェア情報を表示
   printFirmwareInfo();
 
@@ -291,6 +395,9 @@ void loop()
 {
   // ウォッチドッグタイマーをリセット
   esp_task_wdt_reset();
+
+  // LED状態を更新
+  updateLedState();
 
   // WiFi 接続確認・再接続処理
   reconnect_wifi();
@@ -369,6 +476,9 @@ void loop()
     {
       logEvent("INFO", "MQTT publish successful");
       lastMqttPublish = millis();
+      lastMqttPublishSuccess = millis();
+      currentLedState = LED_STATE_MQTT_SUCCESS;
+      setLedColor(0, 255, 0); // 緑色短点灯
       mqttErrorCount = 0;
     }
     else
