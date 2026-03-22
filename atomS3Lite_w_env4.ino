@@ -4,15 +4,15 @@
 #include <Adafruit_BMP280.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
-#include <esp_task_wdt.h>
 #include <FastLED.h>
+#include <time.h>
 #include "config.h"
 
 // ============================================================================
 // FastLED設定 (M5AtomS3 NeoPixel LED)
 // ============================================================================
 #define NUM_LEDS 1
-#define LED_PIN 35 // M5AtomS3 の LED ピン
+#define LED_PIN 35
 CRGB leds[NUM_LEDS];
 
 // ============================================================================
@@ -30,40 +30,42 @@ PubSubClient client(wifiClient);
 // ============================================================================
 // グローバル変数: 状態管理
 // ============================================================================
-unsigned long lastMqttPublish = 0;
-unsigned long lastSensorCheck = 0;
-unsigned long lastWifiReconnectAttempt = 0;
-unsigned long lastLedUpdate = 0;
-unsigned long lastMqttPublishSuccess = 0;
+unsigned long lastPublishAttemptMs = 0;
+unsigned long lastSensorReinitMs = 0;
+unsigned long lastWifiReconnectAttemptMs = 0;
+unsigned long lastMqttReconnectAttemptMs = 0;
+unsigned long lastLedUpdateMs = 0;
+unsigned long lastMqttPublishSuccessMs = 0;
+unsigned long lastNtpSyncAttemptMs = 0;
+unsigned long lastNtpSyncSuccessMs = 0;
+
 unsigned int sensorErrorCount = 0;
 unsigned int mqttErrorCount = 0;
 unsigned int wifiErrorCount = 0;
+unsigned long publishSeq = 0;
+
 bool sensorHealthy = true;
 bool mqttHealthy = true;
+bool timeValid = false;
 
 // ============================================================================
-// グローバル変数: LED状態
+// LED状態
 // ============================================================================
 typedef enum
 {
-  LED_STATE_STARTUP,     // 起動中（紫色）
-  LED_STATE_CONNECTING,  // 接続中（黄色ゆっくり点滅）
-  LED_STATE_HEALTHY,     // 正常（青色点灯）
-  LED_STATE_ERROR,       // エラー（赤色高速点滅）
-  LED_STATE_MQTT_SUCCESS // MQTT送信成功（緑色短点灯）
+  LED_STATE_STARTUP,
+  LED_STATE_CONNECTING,
+  LED_STATE_HEALTHY,
+  LED_STATE_ERROR,
+  LED_STATE_MQTT_SUCCESS
 } LED_State_t;
 
 LED_State_t currentLedState = LED_STATE_STARTUP;
 
 // ============================================================================
-// ユーティリティ関数
+// ユーティリティ
 // ============================================================================
 
-/**
- * @brief システムイベントをシリアルに出力
- * @param level ログレベル ("INFO", "WARN")
- * @param message ログメッセージ
- */
 void logEvent(const char *level, const char *message)
 {
   Serial.print("[");
@@ -72,9 +74,6 @@ void logEvent(const char *level, const char *message)
   Serial.println(message);
 }
 
-/**
- * @brief ファームウェア情報をシリアルに出力
- */
 void printFirmwareInfo()
 {
   Serial.println();
@@ -93,49 +92,32 @@ void printFirmwareInfo()
   Serial.println();
 }
 
-// ============================================================================
-// LED制御関数
-// ============================================================================
-
-/**
- * @brief LEDを指定した色で点灯させる（RGB値で指定）
- * @param red RED値 (0-255)
- * @param green GREEN値 (0-255)
- * @param blue BLUE値 (0-255)
- */
 void setLedColor(uint8_t red, uint8_t green, uint8_t blue)
 {
-  // FastLED を使用して NeoPixel LED を制御
   leds[0] = CRGB(red, green, blue);
   FastLED.show();
 }
 
-/**
- * @brief 現在の健康状態に応じてLED状態を更新
- * 正常：青色点灯
- * 接続中：黄色ゆっくり点滅
- * エラー：赤色高速点滅
- * MQTT送信成功：緑色短点灯
- */
+// ============================================================================
+// LED制御
+// ============================================================================
+
 void updateLedState()
 {
-  unsigned long currentTime = millis();
+  unsigned long nowMs = millis();
 
-  // MQTT送信成功の短い点灯（200msの表示）
   if (currentLedState == LED_STATE_MQTT_SUCCESS &&
-      currentTime - lastMqttPublishSuccess > 200)
+      nowMs - lastMqttPublishSuccessMs > CONFIG_LED_MQTT_SUCCESS_TIME)
   {
     currentLedState = LED_STATE_HEALTHY;
   }
 
-  // 100ms ごとにLED更新
-  if (currentTime - lastLedUpdate < 100)
+  if (nowMs - lastLedUpdateMs < CONFIG_LED_UPDATE_INTERVAL)
   {
     return;
   }
-  lastLedUpdate = currentTime;
+  lastLedUpdateMs = nowMs;
 
-  // エラーがある場合は赤色高速点滅（100ms周期）
   if (sensorErrorCount >= CONFIG_MAX_CONSECUTIVE_ERRORS ||
       mqttErrorCount >= 5 ||
       wifiErrorCount >= 3)
@@ -143,35 +125,117 @@ void updateLedState()
     currentLedState = LED_STATE_ERROR;
     static bool blink = false;
     blink = !blink;
-    setLedColor(blink ? 255 : 0, 0, 0); // 赤色高速点滅
+    setLedColor(blink ? 255 : 0, 0, 0);
   }
-  // WiFiまたはMQTT接続中は黄色ゆっくり点滅（500ms周期）
   else if (WiFi.status() != WL_CONNECTED || !client.connected())
   {
     currentLedState = LED_STATE_CONNECTING;
-    static unsigned long blinkCycle = 0;
-    blinkCycle++;
-    if (blinkCycle > 5) // 500ms周期
-    {
-      blinkCycle = 0;
-    }
-    setLedColor(255, 255, 0); // 黄色点灯（全周期点灯で「ゆっくり」を表現）
+    static bool blink = false;
+    blink = !blink;
+    setLedColor(blink ? 255 : 64, blink ? 180 : 64, 0);
   }
-  // 正常状態は青色点灯
   else
   {
     currentLedState = LED_STATE_HEALTHY;
-    setLedColor(0, 0, 255); // 青色点灯
+    setLedColor(0, 0, 255);
   }
 }
 
 // ============================================================================
-// WiFi 接続関数
+// 時刻/NTP
 // ============================================================================
 
-/**
- * @brief WiFiに接続する
- */
+bool isTimeValid()
+{
+  time_t now = time(nullptr);
+  return now >= CONFIG_VALID_EPOCH_THRESHOLD;
+}
+
+void printCurrentLocalTime()
+{
+  time_t now = time(nullptr);
+  struct tm timeinfo;
+  if (localtime_r(&now, &timeinfo))
+  {
+    char buf[32];
+    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &timeinfo);
+    Serial.print("[INFO] Local time: ");
+    Serial.println(buf);
+  }
+}
+
+bool syncTimeWithNtp(bool verboseLog)
+{
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    if (verboseLog)
+    {
+      logEvent("WARN", "NTP sync skipped: WiFi not connected");
+    }
+    timeValid = isTimeValid();
+    return timeValid;
+  }
+
+  lastNtpSyncAttemptMs = millis();
+
+  if (verboseLog)
+  {
+    logEvent("INFO", "Starting NTP sync");
+  }
+
+  configTzTime(CONFIG_TZ_INFO, CONFIG_NTP_SERVER_1, CONFIG_NTP_SERVER_2, CONFIG_NTP_SERVER_3);
+
+  unsigned long startMs = millis();
+  while (!isTimeValid() && (millis() - startMs < CONFIG_NTP_SYNC_TIMEOUT_MS))
+  {
+    delay(200);
+  }
+
+  timeValid = isTimeValid();
+
+  if (timeValid)
+  {
+    lastNtpSyncSuccessMs = millis();
+    if (verboseLog)
+    {
+      logEvent("INFO", "NTP sync successful");
+      printCurrentLocalTime();
+    }
+    return true;
+  }
+
+  if (verboseLog)
+  {
+    logEvent("WARN", "NTP sync timeout");
+  }
+  return false;
+}
+
+void maintainTimeSync()
+{
+  timeValid = isTimeValid();
+
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    return;
+  }
+
+  if (!timeValid)
+  {
+    syncTimeWithNtp(true);
+    return;
+  }
+
+  if (millis() - lastNtpSyncSuccessMs >= CONFIG_NTP_RESYNC_INTERVAL_MS)
+  {
+    syncTimeWithNtp(true);
+  }
+}
+
+// ============================================================================
+// WiFi
+// ============================================================================
+
 void setup_wifi()
 {
   logEvent("INFO", "Connecting to WiFi");
@@ -179,12 +243,13 @@ void setup_wifi()
   WiFi.setAutoReconnect(true);
   WiFi.begin(ssid, password);
 
-  unsigned long startTime = millis();
+  unsigned long startMs = millis();
   while (WiFi.status() != WL_CONNECTED)
   {
     delay(CONFIG_MQTT_INITIAL_DELAY);
     Serial.print(".");
-    if (millis() - startTime > CONFIG_WIFI_TIMEOUT)
+
+    if (millis() - startMs > CONFIG_WIFI_TIMEOUT)
     {
       logEvent("WARN", "WiFi connection timeout");
       break;
@@ -194,6 +259,8 @@ void setup_wifi()
   if (WiFi.status() == WL_CONNECTED)
   {
     logEvent("INFO", "WiFi connected");
+    Serial.print("[INFO] IP: ");
+    Serial.println(WiFi.localIP());
     wifiErrorCount = 0;
   }
   else
@@ -203,59 +270,55 @@ void setup_wifi()
   }
 }
 
-/**
- * @brief WiFiの接続状態を確認し、必要に応じて再接続する（非ブロッキング）
- * 接続失敗時も、定期的に再接続を試みる
- */
 void reconnect_wifi()
 {
-  unsigned long currentTime = millis();
+  unsigned long nowMs = millis();
 
-  // 前回の再接続試行から一定時間経過した場合のみ実行
-  if (currentTime - lastWifiReconnectAttempt < CONFIG_WIFI_RECONNECT_INTERVAL)
+  if (WiFi.status() == WL_CONNECTED)
   {
     return;
   }
 
-  lastWifiReconnectAttempt = currentTime;
-
-  if (WiFi.status() != WL_CONNECTED)
+  if (nowMs - lastWifiReconnectAttemptMs < CONFIG_WIFI_RECONNECT_INTERVAL)
   {
-    logEvent("INFO", "WiFi disconnected. Attempting to reconnect...");
-    WiFi.reconnect();
+    return;
+  }
 
-    // 短時間の接続試行（ノンブロッキング）
-    int attempt = 0;
-    unsigned long startTime = millis();
-    while (WiFi.status() != WL_CONNECTED &&
-           attempt < 5 && // 最大5回試行（500ms程度）
-           millis() - startTime < 500)
-    {
-      delay(100);
-      Serial.print(".");
-      attempt++;
-    }
+  lastWifiReconnectAttemptMs = nowMs;
 
-    if (WiFi.status() == WL_CONNECTED)
-    {
-      logEvent("INFO", "WiFi reconnected successfully");
-      wifiErrorCount = 0;
-    }
-    else
-    {
-      logEvent("WARN", "WiFi reconnection attempt in progress");
-      wifiErrorCount++;
-    }
+  logEvent("INFO", "WiFi disconnected. Attempting to reconnect...");
+  WiFi.disconnect();
+  delay(50);
+  WiFi.begin(ssid, password);
+
+  unsigned long startMs = millis();
+  while (WiFi.status() != WL_CONNECTED &&
+         millis() - startMs < CONFIG_WIFI_RECONNECT_SHORT_TRY_MS)
+  {
+    delay(100);
+    Serial.print(".");
+  }
+
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    logEvent("INFO", "WiFi reconnected successfully");
+    Serial.print("[INFO] IP: ");
+    Serial.println(WiFi.localIP());
+    wifiErrorCount = 0;
+
+    syncTimeWithNtp(true);
+  }
+  else
+  {
+    logEvent("WARN", "WiFi reconnection attempt did not complete");
+    wifiErrorCount++;
   }
 }
 
 // ============================================================================
-// センサー制御関数
+// センサー
 // ============================================================================
 
-/**
- * @brief センサーを再初期化する
- */
 void reinitialize_sensors()
 {
   logEvent("INFO", "Reinitializing sensors");
@@ -265,92 +328,193 @@ void reinitialize_sensors()
   if (!bmp.begin(CONFIG_BMP280_ADDRESS))
   {
     logEvent("WARN", "BMP280 reinitialization failed");
+    sensorHealthy = false;
+    return;
   }
 
   sensorErrorCount = 0;
   sensorHealthy = true;
-  lastSensorCheck = millis();
+  lastSensorReinitMs = millis();
+}
+
+bool readSensors(float &temperature, float &humidity, float &pressure)
+{
+  temperature = 0.0f;
+  humidity = 0.0f;
+  pressure = 0.0f;
+
+  uint16_t shtError = sht4x.measureHighPrecision(temperature, humidity);
+  if (shtError != 0)
+  {
+    logEvent("WARN", "SHT40 measurement error");
+    sensorErrorCount++;
+
+    if (sensorErrorCount >= CONFIG_MAX_CONSECUTIVE_ERRORS)
+    {
+      sensorHealthy = false;
+      reinitialize_sensors();
+    }
+    return false;
+  }
+
+  sensorErrorCount = 0;
+  sensorHealthy = true;
+
+  pressure = bmp.readPressure() / 100.0F;
+  if (!isfinite(pressure) || pressure <= 0.0f)
+  {
+    logEvent("WARN", "BMP280 measurement invalid");
+    return false;
+  }
+
+  Serial.print("[TEMP] ");
+  Serial.print(temperature, 2);
+  Serial.println(" °C");
+
+  Serial.print("[HUM] ");
+  Serial.print(humidity, 2);
+  Serial.println(" %");
+
+  Serial.print("[PRES] ");
+  Serial.print(pressure, 2);
+  Serial.println(" hPa");
+
+  return true;
 }
 
 // ============================================================================
-// MQTT 接続関数
+// MQTT
 // ============================================================================
 
-/**
- * @brief MQTTサーバーに接続する
- */
-void reconnect()
+void reconnect_mqtt()
 {
-  unsigned long connectStartTime = millis();
+  unsigned long nowMs = millis();
 
-  while (!client.connected())
+  if (client.connected())
   {
-    esp_task_wdt_reset();
+    return;
+  }
 
-    logEvent("INFO", "Attempting MQTT connection");
-    String clientId = "AtomS3Lite-";
-    clientId += String(random(0xffff), HEX);
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    mqttHealthy = false;
+    return;
+  }
 
-    if (client.connect(clientId.c_str()))
-    {
-      logEvent("INFO", "MQTT connected");
-      mqttErrorCount = 0;
-      mqttHealthy = true;
-      break;
-    }
-    else
-    {
-      Serial.print("MQTT failed, rc=");
-      Serial.println(client.state());
-      mqttErrorCount++;
+  if (nowMs - lastMqttReconnectAttemptMs < CONFIG_MQTT_RECONNECT_DELAY)
+  {
+    return;
+  }
 
-      if (millis() - connectStartTime > CONFIG_MQTT_TIMEOUT)
-      {
-        logEvent("WARN", "MQTT connection timeout");
-        mqttHealthy = false;
-        break;
-      }
+  lastMqttReconnectAttemptMs = nowMs;
 
-      delay(CONFIG_MQTT_RECONNECT_DELAY);
-    }
+  logEvent("INFO", "Attempting MQTT connection");
+
+  String clientId = String(CONFIG_MQTT_CLIENT_ID_PREFIX) + String(random(0xffff), HEX);
+
+  if (client.connect(clientId.c_str()))
+  {
+    logEvent("INFO", "MQTT connected");
+    mqttErrorCount = 0;
+    mqttHealthy = true;
+  }
+  else
+  {
+    Serial.print("[WARN] MQTT failed, rc=");
+    Serial.println(client.state());
+    mqttErrorCount++;
+    mqttHealthy = false;
+  }
+}
+
+bool buildPayload(char *payload, size_t payloadSize,
+                  float temperature, float humidity, float pressure)
+{
+  time_t now = time(nullptr);
+  unsigned long uptimeSec = millis() / 1000UL;
+  int tv = isTimeValid() ? 1 : 0;
+
+  int written = snprintf(
+      payload, payloadSize,
+      "{\"id\":\"%s\",\"ts\":%lld,\"temperature\":%.2f,\"humidity\":%.2f,"
+      "\"pressure\":%.2f,\"seq\":%lu,\"uptime_s\":%lu,\"time_valid\":%d}",
+      CONFIG_DEVICE_ID,
+      static_cast<long long>(now),
+      temperature,
+      humidity,
+      pressure,
+      publishSeq,
+      uptimeSec,
+      tv);
+
+  return (written > 0 && static_cast<size_t>(written) < payloadSize);
+}
+
+void publishSensorData(float temperature, float humidity, float pressure)
+{
+  if (!client.connected())
+  {
+    logEvent("WARN", "MQTT not connected, skipping publish");
+    return;
+  }
+
+  if (CONFIG_REQUIRE_TIME_VALID && !isTimeValid())
+  {
+    logEvent("WARN", "Time not valid yet, skipping publish");
+    return;
+  }
+
+  char payload[CONFIG_JSON_PAYLOAD_SIZE];
+  if (!buildPayload(payload, sizeof(payload), temperature, humidity, pressure))
+  {
+    logEvent("WARN", "Payload buffer too small");
+    return;
+  }
+
+  Serial.print("[MQTT] ");
+  Serial.println(payload);
+
+  if (client.publish(CONFIG_MQTT_TOPIC, payload))
+  {
+    logEvent("INFO", "MQTT publish successful");
+    publishSeq++;
+    lastMqttPublishSuccessMs = millis();
+    currentLedState = LED_STATE_MQTT_SUCCESS;
+    setLedColor(0, 255, 0);
+    mqttErrorCount = 0;
+  }
+  else
+  {
+    logEvent("WARN", "MQTT publish failed");
+    mqttErrorCount++;
   }
 }
 
 // ============================================================================
-// システム初期化
+// setup
 // ============================================================================
 
-/**
- * @brief システムを初期化する
- */
 void setup()
 {
   M5.begin();
   Serial.begin(CONFIG_SERIAL_BAUD);
   delay(CONFIG_INIT_DELAY);
 
-  // FastLED初期化（M5AtomS3 NeoPixel LED）
   FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
-  FastLED.setBrightness(200); // 明るさを80%に設定（バッテリー節約）
+  FastLED.setBrightness(CONFIG_LED_BRIGHTNESS);
 
-  // LED初期化（起動中：紫色）
   setLedColor(128, 0, 128);
   currentLedState = LED_STATE_STARTUP;
 
-  // ファームウェア情報を表示
   printFirmwareInfo();
-
   logEvent("INFO", "System startup");
 
-  // I2C 初期化
   Wire.begin(CONFIG_SDA_PIN, CONFIG_SCL_PIN, CONFIG_I2C_FREQ);
   delay(CONFIG_INIT_DELAY);
 
-  // SHT40 センサ初期化
   sht4x.begin(Wire, CONFIG_SHT40_ADDRESS);
   logEvent("INFO", "SHT40 sensor initialized");
 
-  // BMP280 センサ初期化
   if (!bmp.begin(CONFIG_BMP280_ADDRESS))
   {
     logEvent("WARN", "BMP280 sensor initialization failed");
@@ -361,144 +525,63 @@ void setup()
     logEvent("INFO", "BMP280 sensor initialized");
   }
 
-  // WiFi 接続
   setup_wifi();
 
-  // MQTT サーバ設定
   client.setServer(CONFIG_MQTT_SERVER, CONFIG_MQTT_PORT);
   client.setKeepAlive(CONFIG_MQTT_KEEPALIVE);
-  client.setSocketTimeout(CONFIG_MQTT_LOOP_TIMEOUT / 1000);
+  client.setSocketTimeout(CONFIG_MQTT_SOCKET_TIMEOUT_SEC);
+
   randomSeed(micros());
 
-  // ウォッチドッグタイマー初期化
-  esp_task_wdt_config_t wdt_config = {
-      .timeout_ms = CONFIG_WDT_TIMEOUT * 1000,
-      .idle_core_mask = (1 << portNUM_PROCESSORS) - 1,
-      .trigger_panic = true};
-  esp_task_wdt_init(&wdt_config);
-  esp_task_wdt_add(NULL);
-  logEvent("INFO", "Watchdog timer enabled");
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    syncTimeWithNtp(true);
+  }
+
+  lastPublishAttemptMs = millis();
+  lastSensorReinitMs = millis();
 }
 
 // ============================================================================
-// メインループ
+// loop
 // ============================================================================
 
-/**
- * @brief メインループ処理
- * - WiFi接続管理
- * - MQTT接続・データ送信
- * - センサー読取り
- * - ウォッチドッグタイマー管理
- */
 void loop()
 {
-  // ウォッチドッグタイマーをリセット
-  esp_task_wdt_reset();
-
-  // LED状態を更新
   updateLedState();
 
-  // WiFi 接続確認・再接続処理
   reconnect_wifi();
+  maintainTimeSync();
+  reconnect_mqtt();
 
-  // センサー定期再初期化（ハングアップ防止）
-  if (millis() - lastSensorCheck > CONFIG_SENSOR_REINIT_INTERVAL)
+  if (client.connected())
+  {
+    client.loop();
+  }
+
+  if (millis() - lastSensorReinitMs >= CONFIG_SENSOR_REINIT_INTERVAL)
   {
     reinitialize_sensors();
   }
 
-  // MQTT 接続確認・再接続処理
-  if (!client.connected())
+  if (millis() - lastPublishAttemptMs >= CONFIG_PUBLISH_INTERVAL)
   {
-    reconnect();
-  }
+    lastPublishAttemptMs = millis();
 
-  // MQTT loop（タイムアウト保護）
-  unsigned long mqttStartTime = millis();
-  client.loop();
-  unsigned long mqttLoopTime = millis() - mqttStartTime;
-  if (mqttLoopTime > CONFIG_MQTT_LOOP_TIMEOUT)
-  {
-    logEvent("WARN", "MQTT loop timeout");
-  }
+    float temperature = 0.0f;
+    float humidity = 0.0f;
+    float pressure = 0.0f;
 
-  // ============================================================================
-  // センサーデータ取得
-  // ============================================================================
-
-  float temperature = 0.0, humidity = 0.0;
-  uint16_t shtError = sht4x.measureHighPrecision(temperature, humidity);
-
-  if (shtError != 0)
-  {
-    logEvent("WARN", "SHT40 measurement error");
-    sensorErrorCount++;
-    if (sensorErrorCount >= CONFIG_MAX_CONSECUTIVE_ERRORS)
+    bool sensorOk = readSensors(temperature, humidity, pressure);
+    if (sensorOk)
     {
-      sensorHealthy = false;
-      reinitialize_sensors();
-    }
-  }
-  else
-  {
-    sensorErrorCount = 0;
-    Serial.print("[TEMP] ");
-    Serial.print(temperature);
-    Serial.println(" °C");
-    Serial.print("[HUM] ");
-    Serial.print(humidity);
-    Serial.println(" %");
-  }
-
-  // BMP280 から気圧を読取り（Pa → hPa に換算）
-  float pressure = 0.0;
-  if (sensorHealthy)
-  {
-    pressure = bmp.readPressure() / 100.0F;
-    Serial.print("[PRES] ");
-    Serial.print(pressure);
-    Serial.println(" hPa");
-  }
-
-  // ============================================================================
-  // MQTT データ送信
-  // ============================================================================
-
-  if (client.connected() && shtError == 0)
-  {
-    char payload[CONFIG_JSON_PAYLOAD_SIZE];
-    snprintf(payload, sizeof(payload),
-             "{\"temperature\":%.2f, \"humidity\":%.2f, \"pressure\":%.2f}",
-             temperature, humidity, pressure);
-
-    if (client.publish(CONFIG_MQTT_TOPIC, payload))
-    {
-      logEvent("INFO", "MQTT publish successful");
-      lastMqttPublish = millis();
-      lastMqttPublishSuccess = millis();
-      currentLedState = LED_STATE_MQTT_SUCCESS;
-      setLedColor(0, 255, 0); // 緑色短点灯
-      mqttErrorCount = 0;
+      publishSensorData(temperature, humidity, pressure);
     }
     else
     {
-      logEvent("WARN", "MQTT publish failed");
-      mqttErrorCount++;
-    }
-  }
-  else
-  {
-    if (!client.connected())
-    {
-      logEvent("WARN", "MQTT not connected, skipping publish");
-    }
-    if (shtError != 0)
-    {
-      logEvent("WARN", "Sensor error, skipping publish");
+      logEvent("WARN", "Sensor read failed, skipping publish");
     }
   }
 
-  // データ送信間隔で待機
-  delay(CONFIG_PUBLISH_INTERVAL);
+  delay(CONFIG_MAIN_LOOP_DELAY_MS);
 }

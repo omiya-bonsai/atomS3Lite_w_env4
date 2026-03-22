@@ -4,75 +4,107 @@
 // ============================================================================
 // ファームウェア情報
 // ============================================================================
+#define DEVICE_MODEL "M5 Atom S3 Lite"
 #define FIRMWARE_NAME "AtomS3Lite Environmental Sensor"
-#define FIRMWARE_VERSION "1.0.0"
+#define FIRMWARE_VERSION "1.1.1"
 #define FIRMWARE_BUILD_DATE __DATE__
 #define FIRMWARE_BUILD_TIME __TIME__
-#define DEVICE_MODEL "M5 Atom S3 Lite"
+
+// ============================================================================
+// デバイス識別
+// ============================================================================
+#define CONFIG_DEVICE_ID "env4"
+#define CONFIG_MQTT_CLIENT_ID_PREFIX "AtomS3Lite-Env4-"
 
 // ============================================================================
 // WiFi 設定
 // ============================================================================
-// 環境に応じて設定してください
-const char *ssid = "YOUR_SSID";         // WiFiネットワーク名
-const char *password = "YOUR_PASSWORD"; // WiFiパスワード
+const char *ssid = "YOUR_SSID";
+const char *password = "YOUR_PASSWORD";
 
 // ============================================================================
-// I2C 設定（AtomS3 Lite: SDA:2, SCL:1, 周波数:100kHz）
+// I2C 設定
+// AtomS3 Lite: SDA=2, SCL=1
 // ============================================================================
-// ハードウェア固定値（AtomS3 Lite用）
-#define CONFIG_SDA_PIN 2         // I2C SDA ピン
-#define CONFIG_SCL_PIN 1         // I2C SCL ピン
-#define CONFIG_I2C_FREQ 100000UL // I2C 周波数: 100kHz
+#define CONFIG_SDA_PIN 2
+#define CONFIG_SCL_PIN 1
+#define CONFIG_I2C_FREQ 100000UL
 
 // ============================================================================
 // I2C センサアドレス
 // ============================================================================
-// センサーのI2Cアドレス（デフォルト値）
-#define CONFIG_SHT40_ADDRESS 0x44  // SHT40 温湿度センサ
-#define CONFIG_BMP280_ADDRESS 0x76 // BMP280 気圧センサ
+#define CONFIG_SHT40_ADDRESS 0x44
+#define CONFIG_BMP280_ADDRESS 0x76
 
 // ============================================================================
 // MQTT サーバ設定
 // ============================================================================
-// 環境に応じて設定してください
-#define CONFIG_MQTT_SERVER "192.168.1.100" // MQTTサーバのIPアドレス または ホスト名
-#define CONFIG_MQTT_PORT 1883              // MQTTサーバのポート番号
-#define CONFIG_MQTT_TOPIC "sensors/env4"   // パブリッシュするトピック
-#define CONFIG_MQTT_KEEPALIVE 60           // キープアライブ間隔: 60秒
+#define CONFIG_MQTT_SERVER "192.168.3.82"
+#define CONFIG_MQTT_PORT 1883
+#define CONFIG_MQTT_TOPIC "env4"
+#define CONFIG_MQTT_KEEPALIVE 60
+#define CONFIG_MQTT_SOCKET_TIMEOUT_SEC 5
 
 // ============================================================================
-// タイムアウト設定（ミリ秒）
+// NTP / 時刻設定
 // ============================================================================
-// 接続タイムアウト値（必要に応じて調整可能）
-#define CONFIG_WIFI_TIMEOUT 30000     // WiFi接続タイムアウト: 30秒
-#define CONFIG_MQTT_TIMEOUT 10000     // MQTT接続タイムアウト: 10秒
-#define CONFIG_MQTT_LOOP_TIMEOUT 5000 // MQTT loop タイムアウト: 5秒
-#define CONFIG_WDT_TIMEOUT 60         // ウォッチドッグタイマー: 60秒
+#define CONFIG_TZ_INFO "JST-9"
+#define CONFIG_NTP_SERVER_1 "ntp.nict.jp"
+#define CONFIG_NTP_SERVER_2 "pool.ntp.org"
+#define CONFIG_NTP_SERVER_3 "time.google.com"
+
+// NTP同期待ちタイムアウト
+#define CONFIG_NTP_SYNC_TIMEOUT_MS 15000UL
+
+// 24時間ごとに再同期
+#define CONFIG_NTP_RESYNC_INTERVAL_MS 86400000UL
+
+// この epoch より大きければ「有効な時刻」とみなす
+// 1700000000 ≒ 2023-11-14 UTC
+#define CONFIG_VALID_EPOCH_THRESHOLD 1700000000LL
 
 // ============================================================================
-// センサー設定
+// WiFi / MQTT 接続タイミング
 // ============================================================================
-// エラーハンドリング・再初期化の設定
-#define CONFIG_SENSOR_REINIT_INTERVAL 300000  // センサー再初期化間隔: 5分（300,000ms）
-#define CONFIG_HEALTH_CHECK_INTERVAL 600000   // ヘルスチェック間隔: 10分（600,000ms）
-#define CONFIG_MAX_CONSECUTIVE_ERRORS 10      // 最大連続エラー数（この値で自動復帰）
-#define CONFIG_MQTT_RECONNECT_DELAY 2000      // MQTT再接続待機時間: 2秒
-#define CONFIG_MQTT_INITIAL_DELAY 500         // MQTT接続試行間隔: 500ms
-#define CONFIG_WIFI_RECONNECT_MAX_ATTEMPTS 20 // WiFi再接続最大試行数
+#define CONFIG_WIFI_TIMEOUT 30000UL
+#define CONFIG_WIFI_RECONNECT_INTERVAL 10000UL
+#define CONFIG_WIFI_RECONNECT_SHORT_TRY_MS 1000UL
+
+#define CONFIG_MQTT_TIMEOUT 10000UL
+#define CONFIG_MQTT_RECONNECT_DELAY 2000UL
+#define CONFIG_MQTT_INITIAL_DELAY 500UL
+
+// ============================================================================
+// センサー保守設定
+// ============================================================================
+#define CONFIG_SENSOR_REINIT_INTERVAL 300000UL
+#define CONFIG_MAX_CONSECUTIVE_ERRORS 10
 
 // ============================================================================
 // データ送信設定
 // ============================================================================
-// 送信間隔・ペイロード設定
-#define CONFIG_PUBLISH_INTERVAL 30000 // データ送信間隔: 30秒
-#define CONFIG_JSON_PAYLOAD_SIZE 128  // JSONペイロードサイズ: 128バイト
+#define CONFIG_PUBLISH_INTERVAL 30000UL
+#define CONFIG_JSON_PAYLOAD_SIZE 192
+
+// 時刻が有効になるまで publish を抑止するか
+#define CONFIG_REQUIRE_TIME_VALID 1
+
+// ============================================================================
+// LED設定
+// ============================================================================
+#define CONFIG_LED_UPDATE_INTERVAL 100UL
+#define CONFIG_LED_MQTT_SUCCESS_TIME 200UL
+#define CONFIG_LED_BRIGHTNESS 200
+
+// ============================================================================
+// メインループ設定
+// ============================================================================
+#define CONFIG_MAIN_LOOP_DELAY_MS 10UL
 
 // ============================================================================
 // シリアル通信設定
 // ============================================================================
-// デバッグ出力・初期化設定
-#define CONFIG_SERIAL_BAUD 115200 // シリアルボーレート: 115200 bps
-#define CONFIG_INIT_DELAY 100     // 初期化後の待機時間: 100ms
+#define CONFIG_SERIAL_BAUD 115200
+#define CONFIG_INIT_DELAY 100UL
 
 #endif // CONFIG_H
