@@ -39,7 +39,7 @@ const char *password = "YOUR_PASSWORD";
 // ============================================================================
 // MQTT サーバ設定
 // ============================================================================
-#define CONFIG_MQTT_SERVER "192.168.3.82"
+#define CONFIG_MQTT_SERVER "broker.local"
 #define CONFIG_MQTT_PORT 1883
 #define CONFIG_MQTT_TOPIC "env4"
 #define CONFIG_MQTT_KEEPALIVE 60

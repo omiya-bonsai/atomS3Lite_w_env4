@@ -154,7 +154,7 @@ const char *password = "YOUR_PASSWORD";
 #define CONFIG_MQTT_CLIENT_ID_PREFIX "AtomS3Lite-Env4-"
 
 // MQTT設定
-#define CONFIG_MQTT_SERVER "192.168.3.82"
+#define CONFIG_MQTT_SERVER "broker.local"
 #define CONFIG_MQTT_PORT 1883
 #define CONFIG_MQTT_TOPIC "env4"
 
@@ -302,7 +302,7 @@ env4
 MQTT の出力確認は次で行えます。
 
 ```bash
-mosquitto_sub -h 192.168.3.82 -t "env4" -v
+mosquitto_sub -h broker.local -t "env4" -v
 ```
 
 出力例：
@@ -418,7 +418,7 @@ atomS3Lite_w_env4/
 | 項目 | デフォルト | 説明 |
 |------|-----------|------|
 | `CONFIG_DEVICE_ID` | `env4` | payloadに含めるデバイスID |
-| `CONFIG_MQTT_SERVER` | `192.168.3.82` | MQTTブローカー |
+| `CONFIG_MQTT_SERVER` | `broker.local` | MQTTブローカー |
 | `CONFIG_MQTT_PORT` | `1883` | MQTTポート |
 | `CONFIG_MQTT_TOPIC` | `env4` | publish先トピック |
 | `CONFIG_PUBLISH_INTERVAL` | `30000` | publish間隔（ms） |

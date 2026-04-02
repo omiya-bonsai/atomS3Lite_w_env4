@@ -154,7 +154,7 @@ const char *password = "YOUR_PASSWORD";
 #define CONFIG_MQTT_CLIENT_ID_PREFIX "AtomS3Lite-Env4-"
 
 // MQTT settings
-#define CONFIG_MQTT_SERVER "192.168.3.82"
+#define CONFIG_MQTT_SERVER "broker.local"
 #define CONFIG_MQTT_PORT 1883
 #define CONFIG_MQTT_TOPIC "env4"
 
@@ -298,7 +298,7 @@ The revised payload improves:
 You can inspect the MQTT output with:
 
 ```bash
-mosquitto_sub -h 192.168.3.82 -t "env4" -v
+mosquitto_sub -h broker.local -t "env4" -v
 ```
 
 Example output:
@@ -413,7 +413,7 @@ atomS3Lite_w_env4/
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `CONFIG_DEVICE_ID` | `env4` | Device ID included in payload |
-| `CONFIG_MQTT_SERVER` | `192.168.3.82` | MQTT broker address |
+| `CONFIG_MQTT_SERVER` | `broker.local` | MQTT broker address |
 | `CONFIG_MQTT_PORT` | `1883` | MQTT broker port |
 | `CONFIG_MQTT_TOPIC` | `env4` | MQTT publish topic |
 | `CONFIG_PUBLISH_INTERVAL` | `30000` | Publish interval in ms |
