@@ -439,7 +439,7 @@ atomS3Lite_w_env4/
 
 ## ライセンス
 
-MIT License
+- プロジェクトライセンス: [MIT](./LICENSE)
 
 ## 著者
 

@@ -434,7 +434,7 @@ atomS3Lite_w_env4/
 
 ## License
 
-MIT License
+- Project license: [MIT](./LICENSE)
 
 ## Author
 
