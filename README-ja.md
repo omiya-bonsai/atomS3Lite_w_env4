@@ -2,6 +2,8 @@
 
 **言語:** 日本語 | [English](README.md)
 
+[統合ハブ](../../projects/m5papers3-weather-learning-system/README.ja.md)
+
 M5 Atom S3 Lite を使った、**WiFi・NTP・MQTT対応**の環境センサープロジェクトです。  
 温度・湿度・気圧を測定し、監視や記録に向いた**構造化JSON**として MQTT に publish します。
 

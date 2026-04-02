@@ -2,6 +2,8 @@
 
 **Language:** [日本語](README-ja.md) | English
 
+[Integration Hub](../../projects/m5papers3-weather-learning-system/README.md)
+
 An environmental sensor project for **M5 Atom S3 Lite** with **WiFi, NTP, and MQTT** support.  
 It measures **temperature, humidity, and atmospheric pressure**, then publishes structured JSON data to MQTT for monitoring, logging, and alerting workflows.
 
