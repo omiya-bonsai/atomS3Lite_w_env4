@@ -157,6 +157,8 @@ const char *password = "YOUR_PASSWORD";
 #define CONFIG_MQTT_SERVER "broker.local"
 #define CONFIG_MQTT_PORT 1883
 #define CONFIG_MQTT_TOPIC "env4"
+#define CONFIG_MQTT_META_TOPIC "home/env/env4/meta"
+#define CONFIG_MQTT_STATUS_TOPIC "home/env/env4/status"
 
 // Time / NTP settings
 #define CONFIG_TZ_INFO "JST-9"
@@ -241,13 +243,15 @@ Built: Mar 22 2026 12:34:56
 
 ## MQTT Topic and Payload
 
-### Topic
+### Topics
 
 ```text
 env4
+home/env/env4/meta
+home/env/env4/status
 ```
 
-### Payload Example
+### `env4` Payload Example
 
 ```json
 {
@@ -275,6 +279,65 @@ env4
 | `uptime_s` | integer | Device uptime in seconds |
 | `time_valid` | integer | `1` if time is valid, otherwise `0` |
 
+### `home/env/env4/meta` Payload Example
+
+```json
+{
+  "temperature": {
+    "current": 25.50,
+    "avg": 25.12,
+    "delta": 0.38,
+    "delta_prev": 0.11,
+    "rate_pct": 1.51,
+    "trend": "rising"
+  },
+  "humidity": {
+    "current": 45.30,
+    "avg": 46.10,
+    "delta": -0.80,
+    "delta_prev": -0.20,
+    "rate_pct": -1.74,
+    "trend": "stable"
+  },
+  "pressure": {
+    "current": 1013.25,
+    "avg": 1013.40,
+    "delta": -0.15,
+    "delta_prev": -0.03,
+    "rate_pct": -0.015,
+    "trend": "stable"
+  },
+  "samples": 12,
+  "interval_ms": 30000,
+  "seq": 12,
+  "unix_time": 1774150510,
+  "time_valid": true
+}
+```
+
+This topic is retained and summarizes short-term movement for temperature, humidity, and pressure.
+
+### `home/env/env4/status` Payload Example
+
+```json
+{
+  "status": "ok",
+  "reason": "periodic",
+  "wifi": "connected",
+  "ip": "192.168.0.25",
+  "sensor_ready": true,
+  "sensor_error_count": 0,
+  "wifi_reconnect_count": 0,
+  "mqtt_reconnect_count": 0,
+  "uptime_s": 365,
+  "seq": 13,
+  "unix_time": 1774150510,
+  "time_valid": true
+}
+```
+
+This topic is retained and reports the sender health, reconnect counters, and latest status reason.
+
 ## Why the Extra Payload Fields Matter
 
 The older payload format only contained sensor values. That was enough for display, but weak for monitoring.
@@ -299,12 +362,16 @@ You can inspect the MQTT output with:
 
 ```bash
 mosquitto_sub -h broker.local -t "env4" -v
+mosquitto_sub -h broker.local -t "home/env/env4/meta" -v
+mosquitto_sub -h broker.local -t "home/env/env4/status" -v
 ```
 
 Example output:
 
 ```text
 env4 {"id":"env4","ts":1774150510,"temperature":25.50,"humidity":45.30,"pressure":1013.25,"seq":12,"uptime_s":365,"time_valid":1}
+home/env/env4/meta {"temperature":{"current":25.50,"avg":25.12,"delta":0.38,"delta_prev":0.11,"rate_pct":1.51,"trend":"rising"},"humidity":{"current":45.30,"avg":46.10,"delta":-0.80,"delta_prev":-0.20,"rate_pct":-1.74,"trend":"stable"},"pressure":{"current":1013.25,"avg":1013.40,"delta":-0.15,"delta_prev":-0.03,"rate_pct":-0.015,"trend":"stable"},"samples":12,"interval_ms":30000,"seq":12,"unix_time":1774150510,"time_valid":true}
+home/env/env4/status {"status":"ok","reason":"periodic","wifi":"connected","ip":"192.168.0.25","sensor_ready":true,"sensor_error_count":0,"wifi_reconnect_count":0,"mqtt_reconnect_count":0,"uptime_s":365,"seq":13,"unix_time":1774150510,"time_valid":true}
 ```
 
 ## Troubleshooting
@@ -416,6 +483,8 @@ atomS3Lite_w_env4/
 | `CONFIG_MQTT_SERVER` | `broker.local` | MQTT broker address |
 | `CONFIG_MQTT_PORT` | `1883` | MQTT broker port |
 | `CONFIG_MQTT_TOPIC` | `env4` | MQTT publish topic |
+| `CONFIG_MQTT_META_TOPIC` | `home/env/env4/meta` | MQTT meta topic |
+| `CONFIG_MQTT_STATUS_TOPIC` | `home/env/env4/status` | MQTT status topic |
 | `CONFIG_PUBLISH_INTERVAL` | `30000` | Publish interval in ms |
 | `CONFIG_WIFI_TIMEOUT` | `30000` | WiFi connect timeout in ms |
 | `CONFIG_WIFI_RECONNECT_INTERVAL` | `10000` | WiFi reconnect interval in ms |
@@ -424,6 +493,8 @@ atomS3Lite_w_env4/
 | `CONFIG_NTP_SYNC_TIMEOUT_MS` | `15000` | NTP sync timeout in ms |
 | `CONFIG_NTP_RESYNC_INTERVAL_MS` | `86400000` | NTP re-sync interval in ms |
 | `CONFIG_JSON_PAYLOAD_SIZE` | `192` | MQTT payload buffer size |
+| `CONFIG_META_JSON_PAYLOAD_SIZE` | `640` | MQTT meta payload buffer size |
+| `CONFIG_STATUS_JSON_PAYLOAD_SIZE` | `320` | MQTT status payload buffer size |
 
 ## Notes
 

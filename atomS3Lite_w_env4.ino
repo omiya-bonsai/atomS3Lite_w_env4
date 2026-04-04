@@ -30,6 +30,8 @@ PubSubClient client(wifiClient);
 // ============================================================================
 // グローバル変数: 状態管理
 // ============================================================================
+static constexpr size_t META_HISTORY_SIZE = 12;
+
 unsigned long lastPublishAttemptMs = 0;
 unsigned long lastSensorReinitMs = 0;
 unsigned long lastWifiReconnectAttemptMs = 0;
@@ -42,11 +44,22 @@ unsigned long lastNtpSyncSuccessMs = 0;
 unsigned int sensorErrorCount = 0;
 unsigned int mqttErrorCount = 0;
 unsigned int wifiErrorCount = 0;
+unsigned int wifiReconnectCount = 0;
+unsigned int mqttReconnectCount = 0;
 unsigned long publishSeq = 0;
+unsigned long statusSeq = 0;
 
 bool sensorHealthy = true;
 bool mqttHealthy = true;
 bool timeValid = false;
+bool wifiEverConnected = false;
+bool mqttEverConnected = false;
+
+float tempHistory[META_HISTORY_SIZE] = {0};
+float humHistory[META_HISTORY_SIZE] = {0};
+float pressureHistory[META_HISTORY_SIZE] = {0};
+size_t metaHistoryCount = 0;
+size_t metaHistoryIndex = 0;
 
 // ============================================================================
 // LED状態
@@ -96,6 +109,203 @@ void setLedColor(uint8_t red, uint8_t green, uint8_t blue)
 {
   leds[0] = CRGB(red, green, blue);
   FastLED.show();
+}
+
+void addMetaHistory(float temperature, float humidity, float pressure)
+{
+  tempHistory[metaHistoryIndex] = temperature;
+  humHistory[metaHistoryIndex] = humidity;
+  pressureHistory[metaHistoryIndex] = pressure;
+  metaHistoryIndex = (metaHistoryIndex + 1) % META_HISTORY_SIZE;
+  if (metaHistoryCount < META_HISTORY_SIZE)
+  {
+    metaHistoryCount++;
+  }
+}
+
+float historyValue(const float *history, size_t logicalIndex)
+{
+  size_t base = (metaHistoryIndex + META_HISTORY_SIZE - metaHistoryCount) % META_HISTORY_SIZE;
+  size_t actual = (base + logicalIndex) % META_HISTORY_SIZE;
+  return history[actual];
+}
+
+float historyAverage(const float *history)
+{
+  if (metaHistoryCount == 0)
+  {
+    return 0.0f;
+  }
+
+  float sum = 0.0f;
+  for (size_t i = 0; i < metaHistoryCount; ++i)
+  {
+    sum += historyValue(history, i);
+  }
+  return sum / static_cast<float>(metaHistoryCount);
+}
+
+float historyPrevious(const float *history)
+{
+  if (metaHistoryCount < 2)
+  {
+    return historyValue(history, metaHistoryCount - 1);
+  }
+  return historyValue(history, metaHistoryCount - 2);
+}
+
+float deltaFromAverage(float current, float average)
+{
+  return current - average;
+}
+
+float deltaFromPrevious(float current, float previous)
+{
+  return current - previous;
+}
+
+float ratePercent(float current, float average)
+{
+  if (fabs(average) < 0.0001f)
+  {
+    return 0.0f;
+  }
+  return ((current - average) / average) * 100.0f;
+}
+
+const char *classifyEnvTrend(float delta, float mildThreshold, float strongThreshold)
+{
+  if (delta <= -strongThreshold) return "falling_fast";
+  if (delta <= -mildThreshold) return "falling";
+  if (delta >= strongThreshold) return "rising_fast";
+  if (delta >= mildThreshold) return "rising";
+  return "stable";
+}
+
+const char *currentStatusText()
+{
+  if (WiFi.status() != WL_CONNECTED || !client.connected())
+  {
+    return "offline";
+  }
+  if (!sensorHealthy || sensorErrorCount > 0 || mqttErrorCount > 0 || wifiErrorCount > 0)
+  {
+    return "warn";
+  }
+  return "ok";
+}
+
+bool buildStatusPayload(char *payload, size_t payloadSize, const char *reason)
+{
+  time_t now = time(nullptr);
+  unsigned long uptimeSec = millis() / 1000UL;
+  int tv = isTimeValid() ? 1 : 0;
+  const char *wifiText = (WiFi.status() == WL_CONNECTED) ? "connected" : "disconnected";
+  IPAddress ip = WiFi.localIP();
+
+  int written = snprintf(
+      payload, payloadSize,
+      "{\"status\":\"%s\",\"reason\":\"%s\",\"wifi\":\"%s\",\"ip\":\"%u.%u.%u.%u\","
+      "\"sensor_ready\":%s,\"sensor_error_count\":%u,\"wifi_reconnect_count\":%u,"
+      "\"mqtt_reconnect_count\":%u,\"uptime_s\":%lu,\"seq\":%lu,\"unix_time\":%lld,\"time_valid\":%s}",
+      currentStatusText(),
+      reason ? reason : "none",
+      wifiText,
+      ip[0], ip[1], ip[2], ip[3],
+      sensorHealthy ? "true" : "false",
+      sensorErrorCount,
+      wifiReconnectCount,
+      mqttReconnectCount,
+      uptimeSec,
+      statusSeq,
+      static_cast<long long>(now),
+      tv ? "true" : "false");
+
+  return (written > 0 && static_cast<size_t>(written) < payloadSize);
+}
+
+bool publishStatus(const char *reason)
+{
+  if (!client.connected())
+  {
+    return false;
+  }
+
+  char payload[CONFIG_STATUS_JSON_PAYLOAD_SIZE];
+  if (!buildStatusPayload(payload, sizeof(payload), reason))
+  {
+    logEvent("WARN", "Status payload buffer too small");
+    return false;
+  }
+
+  bool ok = client.publish(CONFIG_MQTT_STATUS_TOPIC, payload, true);
+  if (ok)
+  {
+    statusSeq++;
+  }
+  else
+  {
+    logEvent("WARN", "MQTT status publish failed");
+  }
+  return ok;
+}
+
+bool publishEnvMeta(float temperature, float humidity, float pressure)
+{
+  if (!client.connected())
+  {
+    return false;
+  }
+
+  addMetaHistory(temperature, humidity, pressure);
+
+  float tempAvg = historyAverage(tempHistory);
+  float humAvg = historyAverage(humHistory);
+  float pressureAvg = historyAverage(pressureHistory);
+  float tempPrev = historyPrevious(tempHistory);
+  float humPrev = historyPrevious(humHistory);
+  float pressurePrev = historyPrevious(pressureHistory);
+
+  float tempDelta = deltaFromAverage(temperature, tempAvg);
+  float humDelta = deltaFromAverage(humidity, humAvg);
+  float pressureDelta = deltaFromAverage(pressure, pressureAvg);
+  float tempDeltaPrev = deltaFromPrevious(temperature, tempPrev);
+  float humDeltaPrev = deltaFromPrevious(humidity, humPrev);
+  float pressureDeltaPrev = deltaFromPrevious(pressure, pressurePrev);
+  float tempRate = ratePercent(temperature, tempAvg);
+  float humRate = ratePercent(humidity, humAvg);
+  float pressureRate = ratePercent(pressure, pressureAvg);
+
+  char payload[CONFIG_META_JSON_PAYLOAD_SIZE];
+  time_t now = time(nullptr);
+  int tv = isTimeValid() ? 1 : 0;
+  int written = snprintf(
+      payload, sizeof(payload),
+      "{\"temperature\":{\"current\":%.2f,\"avg\":%.2f,\"delta\":%.2f,\"delta_prev\":%.2f,\"rate_pct\":%.2f,\"trend\":\"%s\"},"
+      "\"humidity\":{\"current\":%.2f,\"avg\":%.2f,\"delta\":%.2f,\"delta_prev\":%.2f,\"rate_pct\":%.2f,\"trend\":\"%s\"},"
+      "\"pressure\":{\"current\":%.2f,\"avg\":%.2f,\"delta\":%.2f,\"delta_prev\":%.2f,\"rate_pct\":%.3f,\"trend\":\"%s\"},"
+      "\"samples\":%u,\"interval_ms\":%lu,\"seq\":%lu,\"unix_time\":%lld,\"time_valid\":%s}",
+      temperature, tempAvg, tempDelta, tempDeltaPrev, tempRate, classifyEnvTrend(tempDelta, 0.2f, 0.6f),
+      humidity, humAvg, humDelta, humDeltaPrev, humRate, classifyEnvTrend(humDelta, 2.0f, 6.0f),
+      pressure, pressureAvg, pressureDelta, pressureDeltaPrev, pressureRate, classifyEnvTrend(pressureDelta, 0.3f, 1.0f),
+      static_cast<unsigned>(metaHistoryCount),
+      static_cast<unsigned long>(CONFIG_PUBLISH_INTERVAL),
+      static_cast<unsigned long>(publishSeq),
+      static_cast<long long>(now),
+      tv ? "true" : "false");
+
+  if (written <= 0 || static_cast<size_t>(written) >= sizeof(payload))
+  {
+    logEvent("WARN", "Env meta payload buffer too small");
+    return false;
+  }
+
+  bool ok = client.publish(CONFIG_MQTT_META_TOPIC, payload, true);
+  if (!ok)
+  {
+    logEvent("WARN", "MQTT env meta publish failed");
+  }
+  return ok;
 }
 
 // ============================================================================
@@ -261,6 +471,7 @@ void setup_wifi()
     logEvent("INFO", "WiFi connected");
     Serial.print("[INFO] IP: ");
     Serial.println(WiFi.localIP());
+    wifiEverConnected = true;
     wifiErrorCount = 0;
   }
   else
@@ -304,6 +515,11 @@ void reconnect_wifi()
     logEvent("INFO", "WiFi reconnected successfully");
     Serial.print("[INFO] IP: ");
     Serial.println(WiFi.localIP());
+    if (wifiEverConnected)
+    {
+      wifiReconnectCount++;
+    }
+    wifiEverConnected = true;
     wifiErrorCount = 0;
 
     syncTimeWithNtp(true);
@@ -411,12 +627,22 @@ void reconnect_mqtt()
   logEvent("INFO", "Attempting MQTT connection");
 
   String clientId = String(CONFIG_MQTT_CLIENT_ID_PREFIX) + String(random(0xffff), HEX);
+  char willPayload[CONFIG_STATUS_JSON_PAYLOAD_SIZE];
+  buildStatusPayload(willPayload, sizeof(willPayload), "last_will");
 
-  if (client.connect(clientId.c_str()))
+  if (client.connect(clientId.c_str(), nullptr, nullptr,
+                     CONFIG_MQTT_STATUS_TOPIC, 1, true, willPayload))
   {
     logEvent("INFO", "MQTT connected");
+    const bool wasConnectedBefore = mqttEverConnected;
+    if (wasConnectedBefore)
+    {
+      mqttReconnectCount++;
+    }
+    mqttEverConnected = true;
     mqttErrorCount = 0;
     mqttHealthy = true;
+    publishStatus(wasConnectedBefore ? "reconnect" : "boot");
   }
   else
   {
@@ -477,11 +703,13 @@ void publishSensorData(float temperature, float humidity, float pressure)
   if (client.publish(CONFIG_MQTT_TOPIC, payload))
   {
     logEvent("INFO", "MQTT publish successful");
+    publishEnvMeta(temperature, humidity, pressure);
     publishSeq++;
     lastMqttPublishSuccessMs = millis();
     currentLedState = LED_STATE_MQTT_SUCCESS;
     setLedColor(0, 255, 0);
     mqttErrorCount = 0;
+    publishStatus("periodic");
   }
   else
   {
@@ -580,6 +808,7 @@ void loop()
     else
     {
       logEvent("WARN", "Sensor read failed, skipping publish");
+      publishStatus("sensor_error");
     }
   }
 
