@@ -154,6 +154,17 @@ float historyPrevious(const float *history)
   return historyValue(history, metaHistoryCount - 2);
 }
 
+float historyByStepsBack(const float *history, size_t stepsBack)
+{
+  if (metaHistoryCount == 0 || stepsBack >= metaHistoryCount)
+  {
+    return 0.0f;
+  }
+  size_t latestLogicalIndex = metaHistoryCount - 1;
+  size_t targetLogicalIndex = latestLogicalIndex - stepsBack;
+  return historyValue(history, targetLogicalIndex);
+}
+
 float deltaFromAverage(float current, float average)
 {
   return current - average;
@@ -304,6 +315,86 @@ bool publishEnvMeta(float temperature, float humidity, float pressure)
   if (!ok)
   {
     logEvent("WARN", "MQTT env meta publish failed");
+  }
+  return ok;
+}
+
+bool publishEnvMetaWindows(float temperature, float humidity, float pressure)
+{
+  if (!client.connected())
+  {
+    return false;
+  }
+  if (metaHistoryCount == 0)
+  {
+    return false;
+  }
+
+  const bool hasShort = CONFIG_DELTA_SHORT_STEPS < metaHistoryCount;
+  const bool hasMid = CONFIG_DELTA_MID_STEPS < metaHistoryCount;
+  const bool hasLong = CONFIG_DELTA_LONG_STEPS < metaHistoryCount;
+
+  float tempShort = hasShort ? deltaFromPrevious(temperature, historyByStepsBack(tempHistory, CONFIG_DELTA_SHORT_STEPS)) : 0.0f;
+  float tempMid = hasMid ? deltaFromPrevious(temperature, historyByStepsBack(tempHistory, CONFIG_DELTA_MID_STEPS)) : 0.0f;
+  float tempLong = hasLong ? deltaFromPrevious(temperature, historyByStepsBack(tempHistory, CONFIG_DELTA_LONG_STEPS)) : 0.0f;
+
+  float humShort = hasShort ? deltaFromPrevious(humidity, historyByStepsBack(humHistory, CONFIG_DELTA_SHORT_STEPS)) : 0.0f;
+  float humMid = hasMid ? deltaFromPrevious(humidity, historyByStepsBack(humHistory, CONFIG_DELTA_MID_STEPS)) : 0.0f;
+  float humLong = hasLong ? deltaFromPrevious(humidity, historyByStepsBack(humHistory, CONFIG_DELTA_LONG_STEPS)) : 0.0f;
+
+  float pressureShort = hasShort ? deltaFromPrevious(pressure, historyByStepsBack(pressureHistory, CONFIG_DELTA_SHORT_STEPS)) : 0.0f;
+  float pressureMid = hasMid ? deltaFromPrevious(pressure, historyByStepsBack(pressureHistory, CONFIG_DELTA_MID_STEPS)) : 0.0f;
+  float pressureLong = hasLong ? deltaFromPrevious(pressure, historyByStepsBack(pressureHistory, CONFIG_DELTA_LONG_STEPS)) : 0.0f;
+
+  char tempShortBuf[24], tempMidBuf[24], tempLongBuf[24];
+  char humShortBuf[24], humMidBuf[24], humLongBuf[24];
+  char pressureShortBuf[24], pressureMidBuf[24], pressureLongBuf[24];
+  snprintf(tempShortBuf, sizeof(tempShortBuf), hasShort ? "%.2f" : "null", tempShort);
+  snprintf(tempMidBuf, sizeof(tempMidBuf), hasMid ? "%.2f" : "null", tempMid);
+  snprintf(tempLongBuf, sizeof(tempLongBuf), hasLong ? "%.2f" : "null", tempLong);
+  snprintf(humShortBuf, sizeof(humShortBuf), hasShort ? "%.2f" : "null", humShort);
+  snprintf(humMidBuf, sizeof(humMidBuf), hasMid ? "%.2f" : "null", humMid);
+  snprintf(humLongBuf, sizeof(humLongBuf), hasLong ? "%.2f" : "null", humLong);
+  snprintf(pressureShortBuf, sizeof(pressureShortBuf), hasShort ? "%.2f" : "null", pressureShort);
+  snprintf(pressureMidBuf, sizeof(pressureMidBuf), hasMid ? "%.2f" : "null", pressureMid);
+  snprintf(pressureLongBuf, sizeof(pressureLongBuf), hasLong ? "%.2f" : "null", pressureLong);
+
+  char payload[CONFIG_META_WINDOWS_JSON_PAYLOAD_SIZE];
+  time_t now = time(nullptr);
+  int tv = isTimeValid() ? 1 : 0;
+  int written = snprintf(
+      payload, sizeof(payload),
+      "{\"temperature\":{\"delta_short\":%s,\"delta_mid\":%s,\"delta_long\":%s},"
+      "\"humidity\":{\"delta_short\":%s,\"delta_mid\":%s,\"delta_long\":%s},"
+      "\"pressure\":{\"delta_short\":%s,\"delta_mid\":%s,\"delta_long\":%s},"
+      "\"short_steps\":%u,\"mid_steps\":%u,\"long_steps\":%u,"
+      "\"short_sec\":%lu,\"mid_sec\":%lu,\"long_sec\":%lu,"
+      "\"samples\":%u,\"interval_ms\":%lu,\"seq\":%lu,\"unix_time\":%lld,\"time_valid\":%s}",
+      tempShortBuf, tempMidBuf, tempLongBuf,
+      humShortBuf, humMidBuf, humLongBuf,
+      pressureShortBuf, pressureMidBuf, pressureLongBuf,
+      static_cast<unsigned>(CONFIG_DELTA_SHORT_STEPS),
+      static_cast<unsigned>(CONFIG_DELTA_MID_STEPS),
+      static_cast<unsigned>(CONFIG_DELTA_LONG_STEPS),
+      static_cast<unsigned long>((CONFIG_DELTA_SHORT_STEPS * CONFIG_PUBLISH_INTERVAL) / 1000UL),
+      static_cast<unsigned long>((CONFIG_DELTA_MID_STEPS * CONFIG_PUBLISH_INTERVAL) / 1000UL),
+      static_cast<unsigned long>((CONFIG_DELTA_LONG_STEPS * CONFIG_PUBLISH_INTERVAL) / 1000UL),
+      static_cast<unsigned>(metaHistoryCount),
+      static_cast<unsigned long>(CONFIG_PUBLISH_INTERVAL),
+      static_cast<unsigned long>(publishSeq),
+      static_cast<long long>(now),
+      tv ? "true" : "false");
+
+  if (written <= 0 || static_cast<size_t>(written) >= sizeof(payload))
+  {
+    logEvent("WARN", "Env windows payload buffer too small");
+    return false;
+  }
+
+  bool ok = client.publish(CONFIG_MQTT_META_WINDOWS_TOPIC, payload, true);
+  if (!ok)
+  {
+    logEvent("WARN", "MQTT env windows publish failed");
   }
   return ok;
 }
@@ -704,6 +795,7 @@ void publishSensorData(float temperature, float humidity, float pressure)
   {
     logEvent("INFO", "MQTT publish successful");
     publishEnvMeta(temperature, humidity, pressure);
+    publishEnvMetaWindows(temperature, humidity, pressure);
     publishSeq++;
     lastMqttPublishSuccessMs = millis();
     currentLedState = LED_STATE_MQTT_SUCCESS;

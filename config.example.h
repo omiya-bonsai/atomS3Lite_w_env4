@@ -43,6 +43,7 @@ const char *password = "YOUR_PASSWORD";
 #define CONFIG_MQTT_PORT 1883
 #define CONFIG_MQTT_TOPIC "env4"
 #define CONFIG_MQTT_META_TOPIC "home/env/env4/meta"
+#define CONFIG_MQTT_META_WINDOWS_TOPIC "home/env/env4/meta_windows"
 #define CONFIG_MQTT_STATUS_TOPIC "home/env/env4/status"
 #define CONFIG_MQTT_KEEPALIVE 60
 #define CONFIG_MQTT_SOCKET_TIMEOUT_SEC 5
@@ -88,7 +89,13 @@ const char *password = "YOUR_PASSWORD";
 #define CONFIG_PUBLISH_INTERVAL 30000UL
 #define CONFIG_JSON_PAYLOAD_SIZE 192
 #define CONFIG_META_JSON_PAYLOAD_SIZE 640
+#define CONFIG_META_WINDOWS_JSON_PAYLOAD_SIZE 768
 #define CONFIG_STATUS_JSON_PAYLOAD_SIZE 320
+
+// 短・中・長の差分ウィンドウ（publish単位）
+#define CONFIG_DELTA_SHORT_STEPS 1
+#define CONFIG_DELTA_MID_STEPS 4
+#define CONFIG_DELTA_LONG_STEPS 10
 
 // 時刻が有効になるまで publish を抑止するか
 #define CONFIG_REQUIRE_TIME_VALID 1
